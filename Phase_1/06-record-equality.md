@@ -88,6 +88,23 @@ record Person(string Name, int Age)
 > [!WARNING]
 > If you customise `Equals`, always customise `GetHashCode` to match — same contract as with classes.
 
+### Which compiler-synthesised members you can replace
+
+The compiler synthesises all five equality members, but only backs off for two of them when you write your own:
+
+| Member | Can you replace it? | Keyword |
+|---|---|---|
+| `Equals(T?)` | ✅ Yes — compiler backs off | `virtual` |
+| `GetHashCode()` | ✅ Yes — compiler backs off | `override` |
+| `Equals(object?)` | ❌ No — compiler always generates it | slot taken |
+| `operator ==` | ❌ No — compiler always generates it | slot taken |
+| `operator !=` | ❌ No — compiler always generates it | slot taken |
+
+`Equals(T?)` and `GetHashCode()` are the **only two intended customisation points** for record equality. The other three are pure plumbing — the compiler keeps them and wires them up to your `Equals(T?)` automatically, so they stay consistent.
+
+> [!NOTE]
+> Using `virtual` on `Equals(T?)` is correct — it is not `override` because this method is born fresh in the record with no ancestor to override. `GetHashCode()` uses `override` because it comes from `object`.
+
 ---
 
 ## with expressions and equality
