@@ -2,7 +2,7 @@
 phase: 2
 topic: 5
 title: Synchronization Primitives
-tags: [csharp, threading, synchronization, lock, monitor]
+tags: [csharp, threading, synchronization, lock, monitor, mutex]
 date: 2026-06-03
 status: in-progress
 ---
@@ -13,6 +13,7 @@ status: in-progress
 - [[#Overview]]
 - [[#lock]]
 - [[#Monitor]]
+- [[#Mutex]]
 - [[#SafeQueue Example]]
 - [[#Common Pitfalls]]
 - [[#Interview Questions]]
@@ -185,6 +186,99 @@ This is called a **spurious wakeup guard**.
 
 ---
 
+## Mutex
+
+`Mutex` is like `lock`/`Monitor` but operates at the **OS level**, enabling synchronization across multiple processes or app instances.
+
+### lock vs Mutex
+
+| | `lock` / `Monitor` | `Mutex` |
+|---|---|---|
+| Scope | Single process | Cross-process |
+| Lives in | CLR (user-space) | OS kernel |
+| Speed | Fast | Slow (kernel transition) |
+| Named | ❌ | ✅ |
+| Async-friendly | ❌ | ❌ |
+
+### Creating vs Acquiring
+
+These are two separate steps — easy to confuse:
+
+```csharp
+// Creating — gets a handle to the OS object (does NOT acquire it)
+var mutex = new Mutex(false, "MyAppMutex");
+
+// Acquiring — blocks until the mutex is available
+mutex.WaitOne();
+
+// Releasing
+mutex.ReleaseMutex();
+```
+
+> [!NOTE]
+> The first `bool` parameter of `new Mutex(initiallyOwned, name)` controls whether the **creating thread immediately owns** the mutex. Pass `false` unless you explicitly want to own it on creation.
+
+### Named Mutex — single instance app pattern
+
+A named `Mutex` is a system-wide OS object identified by its name. Any process that uses the same name refers to the **same OS object**.
+
+```csharp
+var mutex = new Mutex(false, "MyAppSingleInstance");
+bool acquired = false;
+
+try
+{
+    try
+    {
+        acquired = mutex.WaitOne(0); // non-blocking — returns immediately
+    }
+    catch (AbandonedMutexException)
+    {
+        acquired = true; // we still own it — previous instance crashed
+        Console.WriteLine("Warning: previous instance crashed, state may be corrupted.");
+    }
+
+    if (!acquired)
+    {
+        Console.WriteLine("Another instance is already running. Exiting.");
+        return;
+    }
+
+    Console.WriteLine("Application started. Running... (press Enter to exit)");
+    Console.ReadLine();
+}
+finally
+{
+    if (acquired)
+        mutex.ReleaseMutex();
+
+    mutex.Dispose();
+}
+```
+
+> [!NOTE]
+> Use `WaitOne(0)` for a **non-blocking attempt** — returns `true` if acquired, `false` if already taken. Without the timeout overload, `WaitOne()` blocks indefinitely.
+
+### AbandonedMutexException
+
+If a thread owns a `Mutex` and **terminates without releasing it**, the Mutex becomes *abandoned*.
+
+- The next thread calling `WaitOne` **does acquire** the Mutex
+- But receives `AbandonedMutexException` as a warning
+- Signals that shared state protected by this Mutex may be **corrupted**
+- You can catch it, log a warning, and decide whether to proceed
+
+> [!WARNING]
+> Do NOT use `using` on `Mutex` for release — `Dispose()` and `ReleaseMutex()` are separate concerns. Always release with `ReleaseMutex()` in a `finally` block, then `Dispose()`.
+
+### Why Mutex is slow
+
+`lock`/`Monitor` operate entirely in **user-space** (CLR manages them). `Mutex` is a kernel object — every acquire/release requires a **user-mode → kernel-mode transition**, which involves a context switch managed by the OS. This makes it orders of magnitude slower than `lock`.
+
+Use `Mutex` only when cross-process synchronization is actually needed. For single-process use, prefer `lock`.
+
+---
+
 ## SafeQueue Example
 
 Bounded producer/consumer queue using `Monitor.Wait` and `PulseAll`:
@@ -283,6 +377,10 @@ Lock convoy occurs when multiple threads contend for the same lock in a tight lo
 8. Why must `Monitor.Wait` always be inside a `while` loop?
 9. Describe a minimal two-thread deadlock using `lock`. How do you prevent it?
 10. What is lock convoy and how do you mitigate it?
+11. What is the difference between `Mutex` and `lock`? When would you choose `Mutex`?
+12. What does `AbandonedMutexException` mean, and does the throwing thread own the Mutex?
+13. Why is `Mutex` slower than `lock`?
+14. What is a named `Mutex` and where does it live?
 
 ---
 
