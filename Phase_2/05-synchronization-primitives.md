@@ -2,7 +2,7 @@
 phase: 2
 topic: 5
 title: Synchronization Primitives
-tags: [csharp, threading, synchronization, lock, monitor, mutex]
+tags: [csharp, threading, synchronization, lock, monitor, mutex, semaphoreslim]
 date: 2026-06-03
 status: in-progress
 ---
@@ -14,6 +14,7 @@ status: in-progress
 - [[#lock]]
 - [[#Monitor]]
 - [[#Mutex]]
+- [[#SemaphoreSlim]]
 - [[#SafeQueue Example]]
 - [[#Common Pitfalls]]
 - [[#Interview Questions]]
@@ -385,3 +386,123 @@ Lock convoy occurs when multiple threads contend for the same lock in a tight lo
 ---
 
 See also: [[02-async-await-internals]] | [[06-deadlocks-race-conditions]]
+
+---
+
+## SemaphoreSlim
+
+A lightweight synchronization primitive that limits the number of threads (or async tasks) that can access a resource concurrently. Unlike `lock` and `Mutex`, it supports `async/await` and allows more than 1 concurrent caller.
+
+### Constructor
+
+```csharp
+new SemaphoreSlim(initialCount)           // same as (initialCount, initialCount)
+new SemaphoreSlim(initialCount, maxCount)
+```
+
+| Parameter | Meaning |
+|---|---|
+| `initialCount` | Available permits at creation time |
+| `maxCount` | Upper bound — `Release()` throws `SemaphoreFullException` if exceeded |
+
+```csharp
+new SemaphoreSlim(3)     // 3 permits, max 3 — throttle pattern
+new SemaphoreSlim(0, 1)  // starts locked — signaling pattern
+```
+
+### Key Methods
+
+| Method | Description |
+|---|---|
+| `Wait()` | Blocks the thread until a permit is available |
+| `WaitAsync()` | Suspends the async method, thread returns to pool |
+| `Release()` | Increments the counter by 1 |
+| `Release(n)` | Increments the counter by n |
+| `CurrentCount` | How many permits are currently available |
+
+> [!WARNING]
+> Always call `Release()` in a `finally` block — if the protected code throws, the permit must still be returned
+
+### Throttle Pattern
+
+Limit concurrent access to a resource (e.g. external API, DB connection pool).
+
+```csharp
+private readonly SemaphoreSlim _semaphore = new SemaphoreSlim(5, 5);
+
+public async Task CallApiAsync()
+{
+    await _semaphore.WaitAsync();
+    try
+    {
+        await httpClient.GetAsync("...");
+    }
+    finally
+    {
+        _semaphore.Release();
+    }
+}
+```
+
+Flow: `WaitAsync()` → do work → `Release()` (same logical owner)
+
+### Signaling Pattern
+
+One task waits, another signals when ready. Semaphore starts at `initialCount = 0`.
+
+```csharp
+var semaphore = new SemaphoreSlim(0, 1);
+
+var consumer = Task.Run(async () =>
+{
+    await semaphore.WaitAsync(); // blocks until signaled
+    Console.WriteLine("got the signal");
+    // no Release() needed — this is a one-shot signal
+});
+
+var producer = Task.Run(async () =>
+{
+    await Task.Delay(1000);
+    semaphore.Release(); // no prior Wait() needed
+});
+
+await Task.WhenAll(consumer, producer);
+```
+
+> [!NOTE]
+> `Release()` does NOT need to be preceded by `Wait()` — it simply increments the counter.
+> Unlike `Monitor` and `Mutex`, calling `Release()` without a prior `Wait()` does not throw.
+
+### Thread Affinity
+
+**Thread affinity** means the same thread that acquired a primitive must release it.
+
+| Primitive | Thread affinity | Works with async/await |
+|---|---|---|
+| `lock` / `Monitor` | ✅ Yes | ❌ No |
+| `Mutex` | ✅ Yes | ❌ No |
+| `SemaphoreSlim` | ❌ No | ✅ Yes |
+
+`SemaphoreSlim` has no ownership tracking — any thread can call `Release()`. This is why it works with `async/await`: the continuation may resume on a different thread, but that doesn't matter.
+
+### lock vs SemaphoreSlim(1,1)
+
+Use `SemaphoreSlim(1, 1)` as a drop-in async replacement for `lock`:
+
+```csharp
+// Instead of: lock (_lock) { ... }
+await _semaphore.WaitAsync();
+try { /* work */ }
+finally { _semaphore.Release(); }
+```
+
+### Comparison with other primitives
+
+| | `lock` | `Monitor` | `Mutex` | `SemaphoreSlim` |
+|---|---|---|---|---|
+| Max concurrent | 1 | 1 | 1 | N |
+| Async support | ❌ | ❌ | ❌ | ✅ |
+| Cross-process | ❌ | ❌ | ✅ | ❌ |
+| Thread affinity | ✅ | ✅ | ✅ | ❌ |
+| Release before Wait | throws | throws | throws | ✅ allowed |
+
