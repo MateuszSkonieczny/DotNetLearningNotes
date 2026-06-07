@@ -2,7 +2,7 @@
 phase: 2
 topic: 5
 title: Synchronization Primitives
-tags: [csharp, threading, synchronization, lock, monitor, mutex, semaphoreslim]
+tags: [csharp, threading, synchronization, lock, monitor, mutex, semaphoreslim, readerwriterlockslim]
 date: 2026-06-03
 status: in-progress
 ---
@@ -18,6 +18,7 @@ status: in-progress
 - [[#SafeQueue Example]]
 - [[#Common Pitfalls]]
 - [[#Interview Questions]]
+- [[#ReaderWriterLockSlim]]
 
 ---
 
@@ -506,3 +507,176 @@ finally { _semaphore.Release(); }
 | Thread affinity | ✅ | ✅ | ✅ | ❌ |
 | Release before Wait | throws | throws | throws | ✅ allowed |
 
+
+---
+
+## ReaderWriterLockSlim
+
+#threading #rwlock #caching
+
+`ReaderWriterLockSlim` optimises for workloads where reads vastly outnumber writes. A plain `lock` serialises every operation — even two concurrent reads block each other. `ReaderWriterLockSlim` allows unlimited concurrent readers; only writes require exclusivity.
+
+### When to use
+
+- Shared in-memory cache read by many threads, refreshed rarely
+- Configuration object reloaded on file change
+- Any read-heavy, write-rare shared state
+
+> [!NOTE]
+> For write-heavy workloads, `ReaderWriterLockSlim` adds overhead vs `lock` with no benefit. Profile before reaching for it.
+
+---
+
+### Three lock modes
+
+| Mode | Enter | Exit | Concurrency |
+|---|---|---|---|
+| Read | `EnterReadLock()` | `ExitReadLock()` | Many threads simultaneously |
+| Upgradeable read | `EnterUpgradeableReadLock()` | `ExitUpgradeableReadLock()` | One at a time; readers can coexist |
+| Write | `EnterWriteLock()` | `ExitWriteLock()` | Fully exclusive |
+
+**Coexistence matrix:**
+
+| Lock held → | + Read | + Upgradeable read | + Write |
+|---|---|---|---|
+| **Read** | ✅ | ✅ | ❌ |
+| **Upgradeable read** | ✅ | ❌ | ❌ |
+| **Write** | ❌ | ❌ | ❌ |
+
+While an upgradeable read lock is held but not yet upgraded, regular readers still proceed. The upgrade blocks new readers only when `EnterWriteLock()` is called — at that point it waits for existing readers to drain.
+
+---
+
+### The upgradeable read lock
+
+**Why it exists — two problems it solves:**
+
+**1. Deadlock prevention.** If a thread holds a plain read lock and calls `EnterWriteLock()`, it deadlocks immediately: the write lock waits for all readers to finish, including itself. The thread is waiting for itself to release — it never will.
+
+**2. Atomicity.** Without an upgradeable read, another writer could mutate the resource between your read and your write, invalidating what you just read.
+
+```csharp
+// WRONG — deadlocks immediately
+_lock.EnterReadLock();
+// ...read...
+_lock.EnterWriteLock(); // waits for all readers including THIS thread → deadlock
+
+// CORRECT
+_lock.EnterUpgradeableReadLock();
+try
+{
+    // read and check condition
+    if (needsUpdate)
+    {
+        _lock.EnterWriteLock();
+        try { /* mutate */ }
+        finally { _lock.ExitWriteLock(); }
+    }
+}
+finally { _lock.ExitUpgradeableReadLock(); }
+```
+
+> [!WARNING]
+> Only **one thread** can hold the upgradeable read lock at a time. Two threads both trying to "read then maybe write" will serialize on this lock even if neither ends up writing.
+
+---
+
+### Full example — cached user store
+
+```csharp
+public class CachedUserStore : IDisposable
+{
+    private readonly ReaderWriterLockSlim _lock = new();
+    private readonly Dictionary<int, string> _cache = new();
+
+    public string? GetUser(int id)
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            _cache.TryGetValue(id, out var name);
+            return name;
+        }
+        finally { _lock.ExitReadLock(); }
+    }
+
+    public void AddOrRefresh(int id, string name)
+    {
+        _lock.EnterUpgradeableReadLock();
+        try
+        {
+            // Skip write if value is unchanged
+            if (_cache.TryGetValue(id, out var existing) && existing == name)
+                return;
+
+            _lock.EnterWriteLock();
+            try { _cache[id] = name; }
+            finally { _lock.ExitWriteLock(); }
+        }
+        finally { _lock.ExitUpgradeableReadLock(); }
+    }
+
+    public void Remove(int id)
+    {
+        _lock.EnterWriteLock();
+        try { _cache.Remove(id); }
+        finally { _lock.ExitWriteLock(); }
+    }
+
+    // Any class owning an IDisposable field should implement IDisposable
+    public void Dispose() => _lock.Dispose();
+}
+```
+
+> [!WARNING]
+> Never call `_lock.Dispose()` inside a method. The lock is shared state for the lifetime of the object — dispose it only when the object itself is disposed.
+
+---
+
+### Common mistakes
+
+| Mistake | Consequence |
+|---|---|
+| `EnterReadLock()` then `EnterWriteLock()` | Deadlock — thread waits for itself |
+| Using `EnterReadLock()` instead of `EnterWriteLock()` inside upgradeable block | Writing under a read lock — data corruption under concurrent reads |
+| `Dispose()` inside a single method | All subsequent lock calls throw `ObjectDisposedException` |
+| Two threads both using upgradeable read for "read then maybe write" | Unnecessary serialization — only one can hold it at a time |
+
+---
+
+### Comparison with other primitives
+
+| | `lock` | `Mutex` | `SemaphoreSlim(1,1)` | `ReaderWriterLockSlim` |
+|---|---|---|---|---|
+| Concurrent readers | ❌ | ❌ | ❌ | ✅ |
+| Async support | ❌ | ❌ | ✅ | ❌ |
+| Cross-process | ❌ | ✅ | ❌ | ❌ |
+| Upgrade read→write | ❌ | ❌ | ❌ | ✅ |
+| Overhead | Low | High | Low | Medium |
+
+> [!NOTE]
+> `ReaderWriterLockSlim` has no `WaitAsync()` — it is **not async-compatible**. For async read-heavy scenarios, consider `SemaphoreSlim` or a dedicated async-friendly reader-writer library.
+
+---
+
+### Interview questions
+
+**Q: Why can't you upgrade a plain read lock to a write lock?**
+A: `EnterWriteLock()` waits for all current readers to exit. If the calling thread holds a read lock, it is one of those readers — it creates an unresolvable wait on itself.
+
+**Q: Why is only one upgradeable read lock allowed at a time?**
+A: If two threads both held upgradeable reads and both tried to upgrade, each would wait for the other to release before acquiring the write lock — a deadlock between upgraders. The single-slot constraint prevents this.
+
+**Q: When is `ReaderWriterLockSlim` NOT worth it?**
+A: When writes are frequent, or when the protected operation is so fast that the extra overhead of RWLS exceeds the gain from concurrent reads. Measure first.
+
+---
+
+## See also
+
+- [[lock]]
+- [[Monitor]]
+- [[Mutex]]
+- [[SemaphoreSlim]]
+- [[05-synchronization-primitives]]
+- [[02-async-await-internals]]
