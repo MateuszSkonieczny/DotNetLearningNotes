@@ -2,7 +2,7 @@
 phase: 2
 topic: 5
 title: Synchronization Primitives
-tags: [csharp, threading, synchronization, lock, monitor, mutex, semaphoreslim, readerwriterlockslim]
+tags: [csharp, threading, synchronization, lock, monitor, mutex, semaphoreslim, readerwriterlockslim, manualreseteventslim]
 date: 2026-06-03
 status: in-progress
 ---
@@ -19,6 +19,7 @@ status: in-progress
 - [[#Common Pitfalls]]
 - [[#Interview Questions]]
 - [[#ReaderWriterLockSlim]]
+- [[#ManualResetEventSlim]]
 
 ---
 
@@ -672,11 +673,121 @@ A: When writes are frequent, or when the protected operation is so fast that the
 
 ---
 
+---
+
+## ManualResetEventSlim
+
+#manualreseteventslim
+
+`ManualResetEventSlim` is a lightweight signaling primitive that acts as a **gate**: it is either open (set) or closed (unset). All threads calling `Wait()` block when the gate is closed and are released simultaneously when it is opened.
+
+> [!NOTE]
+> `ManualResetEventSlim` is the lightweight managed alternative to `ManualResetEvent`. It uses spin-waiting before falling back to a kernel wait handle, making it faster for short waits.
+
+### States and methods
+
+| Method | What it does |
+|---|---|
+| `Set()` | Opens the gate — all waiting threads are released, future `Wait()` calls pass through instantly |
+| `Reset()` | Closes the gate — future `Wait()` calls will block again |
+| `Wait()` | Blocks the calling thread until the event is in set state |
+| `Wait(timeout)` | Returns `bool` — `true` if set in time, `false` if timed out |
+| `Wait(cancellationToken)` | Throws `OperationCanceledException` if token is cancelled |
+| `Wait(timeout, cancellationToken)` | Combines both |
+
+### Gate behaviour
+
+```csharp
+var mre = new ManualResetEventSlim(false); // starts closed
+
+// Thread A — blocks
+mre.Wait();
+
+// Thread B — opens gate, releases ALL waiting threads
+mre.Set();
+
+// Thread C — arrives after Set(), passes through immediately
+mre.Wait(); // does not block
+
+// Reset closes the gate again
+mre.Reset();
+mre.Wait(); // blocks again
+```
+
+> [!WARNING]
+> Unlike `AutoResetEvent`, the gate stays open after `Set()`. You must explicitly call `Reset()` to close it again.
+
+### ManualResetEventSlim vs AutoResetEvent
+
+| | `ManualResetEventSlim` | `AutoResetEvent` |
+|---|---|---|
+| Analogy | Door | Turnstile |
+| Threads released per `Set()` | All waiting threads | Exactly one |
+| Gate after `Set()` | Stays open | Closes immediately |
+| Reset | Manual (`Reset()`) | Automatic |
+
+### Typical pattern — startup barrier
+
+```csharp
+private readonly ManualResetEventSlim _ready = new ManualResetEventSlim(false);
+
+// Loader thread
+void Initialize()
+{
+    _ready.Reset();              // close gate before reload
+    // ... heavy initialization ...
+    _ready.Set();                // open gate — all workers proceed
+}
+
+// Worker threads
+void DoWork(CancellationToken ct)
+{
+    bool canPass = _ready.Wait(3000, ct);  // timeout + cancellation
+
+    if (!canPass)
+        Console.WriteLine("Warning: config not ready in time, skipping.");
+    else
+        Console.WriteLine("Config ready — doing work.");
+}
+```
+
+> [!NOTE]
+> Call `Reset()` at the **start** of `Initialize()`, not at the end. Workers arriving mid-reload must be held back immediately — resetting after the load is too late.
+
+### Async limitation
+
+`ManualResetEventSlim.Wait()` is a **synchronous blocking call**. It works correctly in sync code and short-lived tools, but in ASP.NET Core it blocks a thread pool thread for the duration of the wait.
+
+| | Blocks thread | Async-safe |
+|---|---|---|
+| `mre.Wait()` | ✅ | ⚠️ avoid in async server code |
+| `semaphore.WaitAsync()` | ❌ | ✅ |
+
+For broadcast signaling in async code, `TaskCompletionSource` is the common alternative.
+
+### Interview questions
+
+**Q: What is the difference between `ManualResetEventSlim` and `AutoResetEvent`?**
+A: `ManualResetEventSlim` releases all waiting threads when `Set()` is called and stays open until `Reset()` is called explicitly. `AutoResetEvent` releases exactly one thread per `Set()` and resets itself automatically — it is a turnstile, not a door.
+
+**Q: What happens if a thread calls `Wait()` after `Set()` but before `Reset()`?**
+A: It passes through immediately without blocking. The gate is open and remains open until `Reset()` is called.
+
+**Q: Why must `Reset()` be called at the start of a reload, not the end?**
+A: Workers may arrive and call `Wait()` at any point during the reload. If the gate is still open from the previous load, they pass through and use a partially initialized resource. `Reset()` at the start closes the gate before any work begins, ensuring all workers wait for the full new initialization.
+
+**Q: Why is `ManualResetEventSlim` not suitable as a drop-in in async server code?**
+A: `Wait()` has no async overload — it blocks the calling thread. In ASP.NET Core under load this wastes thread pool threads. Use `TaskCompletionSource` for one-shot async signals instead.
+
+---
+
 ## See also
 
 - [[lock]]
 - [[Monitor]]
 - [[Mutex]]
 - [[SemaphoreSlim]]
+- [[ReaderWriterLockSlim]]
+- [[ManualResetEventSlim]]
 - [[05-synchronization-primitives]]
 - [[02-async-await-internals]]
