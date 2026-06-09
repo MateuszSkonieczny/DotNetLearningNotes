@@ -2,7 +2,7 @@
 phase: 2
 topic: 5
 title: Synchronization Primitives
-tags: [csharp, threading, synchronization, lock, monitor, mutex, semaphoreslim, readerwriterlockslim, manualreseteventslim]
+tags: [csharp, threading, synchronization, lock, monitor, mutex, semaphoreslim, readerwriterlockslim, manualreseteventslim, autoresetevent]
 date: 2026-06-03
 status: in-progress
 ---
@@ -20,6 +20,7 @@ status: in-progress
 - [[#Interview Questions]]
 - [[#ReaderWriterLockSlim]]
 - [[#ManualResetEventSlim]]
+- [[#AutoResetEvent]]
 
 ---
 
@@ -781,6 +782,131 @@ A: `Wait()` has no async overload — it blocks the calling thread. In ASP.NET C
 
 ---
 
+## AutoResetEvent
+
+`AutoResetEvent` is a signaling primitive that acts as a **turnstile**: it releases exactly one waiting thread per `Set()` call, then resets itself automatically. It is the kernel-mode counterpart to `ManualResetEventSlim` for one-thread-at-a-time signaling.
+
+> [!NOTE]
+> `AutoResetEvent` inherits from `WaitHandle` and is a Windows kernel object. Every `WaitOne()`/`Set()` crosses into kernel mode. For short-lived waits on a dedicated thread it is idiomatic; for async code prefer `SemaphoreSlim(0, 1)` with `WaitAsync()`.
+
+### States and methods
+
+| Method / Property | Description |
+|---|---|
+| `new AutoResetEvent(false)` | Starts **unset** (gate closed) |
+| `new AutoResetEvent(true)` | Starts **set** (gate open — first caller passes through immediately) |
+| `WaitOne()` | Blocks until the event is set, then resets it |
+| `WaitOne(TimeSpan)` | Blocks with timeout; returns `false` if timeout fires |
+| `Set()` | Opens the gate — releases exactly one waiting thread (or latches open if no thread is waiting) |
+| `Reset()` | Forces the event to unset state |
+
+### Signal latching
+
+If `Set()` is called when no thread is waiting, the signal is **not lost** — the event stays set. The next thread to call `WaitOne()` passes through immediately and then the event resets.
+
+```csharp
+var are = new AutoResetEvent(false);
+
+are.Set(); // no thread waiting — signal latches
+
+// later...
+are.WaitOne(); // passes through immediately, event resets
+are.WaitOne(); // blocks — no pending signal
+```
+
+### AutoResetEvent vs ManualResetEventSlim
+
+| | `AutoResetEvent` | `ManualResetEventSlim` |
+|---|---|---|
+| Threads released per `Set()` | **One** | **All** |
+| Resets after release | **Automatically** | Must call `Reset()` manually |
+| Async support | ❌ | ❌ |
+| Kernel object | ✅ (heavier) | ❌ (lightweight, spin first) |
+| Use case | One-at-a-time trigger | Broadcast / startup barrier |
+
+### Cancellation-safe WaitOne
+
+`WaitOne()` alone cannot be cancelled. Use `WaitHandle.WaitAny` with the cancellation token's wait handle:
+
+```csharp
+var are = new AutoResetEvent(false);
+var cts = new CancellationTokenSource();
+
+var handles = new WaitHandle[] { are, cts.Token.WaitHandle };
+
+while (true)
+{
+    var index = WaitHandle.WaitAny(handles);
+    if (index == 1) break; // cancellation fired
+
+    // index == 0: event fired, process work
+}
+```
+
+> [!WARNING]
+> `ThrowIfCancellationRequested()` at the top of a loop does not help if the thread is blocked inside `WaitOne()`. Always use `WaitHandle.WaitAny` when you need cancellation support.
+
+### Two-event pipeline handoff pattern
+
+Use two `AutoResetEvent` instances to synchronize a strict producer/consumer handoff where each side must wait for the other to finish before proceeding:
+
+```csharp
+// prodReady starts set — producer goes first
+var prodReady = new AutoResetEvent(true);
+var conReady  = new AutoResetEvent(false);
+var queue     = new Queue<int>();
+
+var producer = new Thread(() =>
+{
+    for (int i = 1; i <= 5; i++)
+    {
+        prodReady.WaitOne();          // wait for consumer to finish previous item
+        queue.Enqueue(i);
+        Console.WriteLine($"Produced: {i}");
+        conReady.Set();               // signal consumer
+    }
+});
+
+var consumer = new Thread(() =>
+{
+    for (int i = 0; i < 5; i++)
+    {
+        conReady.WaitOne();           // wait for producer
+        var item = queue.Dequeue();
+        Console.WriteLine($"Consumed: {item}");
+        prodReady.Set();              // signal producer
+    }
+});
+```
+
+> [!NOTE]
+> `Queue<T>` is not thread-safe. The handoff pattern here makes concurrent access structurally impossible (only one thread touches the queue at a time), but in less constrained scenarios use `ConcurrentQueue<T>`.
+
+### When to use AutoResetEvent
+
+| Scenario | Preferred primitive |
+|---|---|
+| Dedicated background `Thread`, one trigger at a time | `AutoResetEvent` |
+| Async trigger, one at a time | `SemaphoreSlim(0, 1)` + `WaitAsync()` |
+| Release all waiting threads at once | `ManualResetEventSlim` |
+| Limit N concurrent callers | `SemaphoreSlim(N)` |
+
+### Interview questions
+
+**Q: What happens if `Set()` is called when no thread is waiting on `AutoResetEvent`?**
+A: The signal latches — the event stays set. The next thread to call `WaitOne()` passes through immediately, then the event resets automatically.
+
+**Q: Why can't you just put `ThrowIfCancellationRequested()` at the top of the loop instead of using `WaitHandle.WaitAny`?**
+A: Because `WaitOne()` blocks the thread. Cancellation is requested while the thread is stuck inside `WaitOne()`, so the check at the top of the loop never runs until the wait completes (or times out). `WaitHandle.WaitAny` watches both the event and the cancellation handle simultaneously, so cancellation unblocks the thread immediately.
+
+**Q: When would you choose `SemaphoreSlim(0,1)` over `AutoResetEvent` for a one-at-a-time trigger?**
+A: When the waiting code is async. `AutoResetEvent.WaitOne()` blocks the thread; `SemaphoreSlim.WaitAsync()` suspends the async method and returns the thread to the pool. In ASP.NET Core or any thread-pool-sensitive context, blocking with `WaitOne()` wastes thread pool threads under load.
+
+**Q: Why is `Queue<T>` acceptable in the two-event pipeline pattern despite being non-thread-safe?**
+A: The handoff semantics guarantee that only one thread touches the queue at a time — the producer enqueues then signals and waits, the consumer dequeues then signals back. There is no moment of concurrent access. It is still good practice to note the assumption and use `ConcurrentQueue<T>` if the constraint were ever relaxed.
+
+---
+
 ## See also
 
 - [[lock]]
@@ -789,5 +915,6 @@ A: `Wait()` has no async overload — it blocks the calling thread. In ASP.NET C
 - [[SemaphoreSlim]]
 - [[ReaderWriterLockSlim]]
 - [[ManualResetEventSlim]]
+- [[AutoResetEvent]]
 - [[05-synchronization-primitives]]
 - [[02-async-await-internals]]
