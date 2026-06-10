@@ -2,7 +2,7 @@
 phase: 2
 topic: 5
 title: Synchronization Primitives
-tags: [csharp, threading, synchronization, lock, monitor, mutex, semaphoreslim, readerwriterlockslim, manualreseteventslim, autoresetevent]
+tags: [csharp, threading, synchronization, lock, monitor, mutex, semaphoreslim, readerwriterlockslim, manualreseteventslim, autoresetevent, interlocked]
 date: 2026-06-03
 status: in-progress
 ---
@@ -21,6 +21,7 @@ status: in-progress
 - [[#ReaderWriterLockSlim]]
 - [[#ManualResetEventSlim]]
 - [[#AutoResetEvent]]
+- [[#Interlocked]]
 
 ---
 
@@ -907,6 +908,122 @@ A: The handoff semantics guarantee that only one thread touches the queue at a t
 
 ---
 
+## Interlocked
+
+`Interlocked` is a static class in `System.Threading` that provides **atomic operations on single variables** without a `lock`. Each operation is a single indivisible CPU instruction (or hardware-enforced sequence) — no thread can observe a half-completed state.
+
+### Why it exists
+
+`counter++` compiles to three steps: read → add → write. Two threads can both read the same value, both add 1, and both write back — a **lost update** (race condition). `Interlocked.Increment` collapses that into one atomic operation.
+
+### Methods
+
+| Method | Equivalent | Returns |
+|---|---|---|
+| `Increment(ref int)` | `++` | New value |
+| `Decrement(ref int)` | `--` | New value |
+| `Add(ref int, int)` | `+= value` | New value |
+| `Exchange(ref int, int)` | set, get old | Old value |
+| `CompareExchange(ref int, int, int)` | conditional set | Old value |
+| `Read(ref long)` | atomic 64-bit read | Current value |
+
+> [!NOTE]
+> All methods require `ref` — `Interlocked` needs the memory address of the variable, not a copy of its value.
+
+### CompareExchange
+
+Signature: `CompareExchange(ref location, value, comparand)`
+
+Atomically: **if `location == comparand`, set `location = value`**. Always returns the original value of `location` before the operation.
+
+```csharp
+// Lock-free lazy initialisation pattern
+private string _connectionString = null;
+
+public string ConnectionString
+{
+    get
+    {
+        if (_connectionString != null) return _connectionString; // fast path
+
+        var loaded = Load(); // may be called by multiple racing threads — acceptable
+        var prev = Interlocked.CompareExchange(ref _connectionString, loaded, null);
+        // prev == null  → we won the race, _connectionString is now loaded
+        // prev != null  → someone else won, return their value
+        return prev ?? _connectionString;
+    }
+}
+```
+
+> [!NOTE]
+> `Load()` may be called more than once when multiple threads race on first access — that is acceptable. What must be prevented is storing more than one result. `CompareExchange` guarantees exactly one value ever wins.
+
+### Two guarantees: atomicity + memory barrier
+
+`Interlocked` provides both — these are distinct concepts:
+
+| Guarantee | What it prevents |
+|---|---|
+| **Atomicity** | Another thread seeing a half-done operation (torn read/write) |
+| **Memory barrier** | A thread reading a stale cached value due to CPU/compiler reordering |
+
+**Memory barrier detail:** Modern CPUs reorder independent writes for performance and each core has its own cache. Without a barrier, Core A can write `data = 42` and `ready = true`, but Core B may see them in reverse order (reordering), or may read `data` from its own stale cache. A full memory barrier forces all writes before it to be flushed to main memory and visible to all cores before any reads after it execute.
+
+```csharp
+// Without barrier — Thread B can print 0 even if Thread A finishes first
+data = 42;
+ready = true; // CPU may reorder this before data = 42
+
+// With Interlocked — barrier on both sides
+data = 42;
+Interlocked.Exchange(ref ready, 1);       // full barrier: flush before signal
+
+while (Interlocked.Read(ref ready) == 0) { }  // barrier on read side
+Console.WriteLine(data); // guaranteed 42
+```
+
+> [!NOTE]
+> `volatile` gives you the memory barrier but NOT atomicity — `volatile int counter; counter++` is still a race condition. `Interlocked` gives you both.
+
+### Interlocked vs lock
+
+| | `Interlocked` | `lock` |
+|---|---|---|
+| Operations | Single variable, numeric ops only | Arbitrary multi-step logic |
+| Blocking | Never blocks | Blocks competing threads |
+| Kernel transition | ❌ (user-space) | ❌ for uncontended, ✅ for contended |
+| Speed | Fastest | Slower |
+| Async-friendly | ✅ | ❌ (no `await` inside `lock`) |
+
+Reach for `Interlocked` when protecting a single counter or reference. Use `lock` when protecting multi-step logic or compound state.
+
+### GetAndReset pattern
+
+`Exchange` is the building block for atomic swap-and-read:
+
+```csharp
+public int GetAndReset()
+{
+    return Interlocked.Exchange(ref _value, 0); // atomically sets to 0, returns old value
+}
+```
+
+### Interview questions
+
+**Q: Why is `counter++` a race condition even though it looks like one operation?**
+A: It compiles to three instructions: read the value, add 1, write back. Two threads can both read the same value before either writes, causing a lost update. `Interlocked.Increment` is a single atomic CPU instruction — no thread can interleave.
+
+**Q: What does `Interlocked.CompareExchange` return, and how is that used in lock-free lazy init?**
+A: It always returns the original value of `location` before the operation. In lazy init the comparand is `null` — if the returned value is `null`, the caller won the race and stored their value. If it is non-null, another thread already stored a value; the caller discards theirs and uses the stored one.
+
+**Q: What is a memory barrier, and why does `Interlocked` need to provide one?**
+A: A memory barrier prevents the CPU and compiler from reordering reads and writes across the barrier, and forces cached writes to be flushed to main memory so all cores see a consistent view. Without one, even an atomic write may not be visible to other cores in the expected order — another thread could observe the signal (`ready = true`) before the data it depends on (`data = 42`).
+
+**Q: What is the difference between `volatile` and `Interlocked`?**
+A: `volatile` provides a memory barrier (preventing stale cache reads and reordering) but does not provide atomicity — `volatile counter++` is still a read-modify-write race condition. `Interlocked` provides both atomicity and a full memory barrier.
+
+---
+
 ## See also
 
 - [[lock]]
@@ -916,5 +1033,6 @@ A: The handoff semantics guarantee that only one thread touches the queue at a t
 - [[ReaderWriterLockSlim]]
 - [[ManualResetEventSlim]]
 - [[AutoResetEvent]]
+- [[Interlocked]]
 - [[05-synchronization-primitives]]
 - [[02-async-await-internals]]
