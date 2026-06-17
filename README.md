@@ -8,7 +8,7 @@ Notes are organized by phase, following a structured 9-phase learning plan order
 
 | Phase | Topic | Status | Notes |
 |-------|-------|--------|-------|
-| Phase 2 | Threading & Async | 🔄 In progress | 4/8 topics |
+| Phase 2 | Threading & Async | 🔄 In progress | 7/9 topics |
 | Phase 3 | C# Internals | ⏳ Upcoming | |
 | Phase 5 | Design Patterns | ⏳ Upcoming | |
 | Phase 4 | ASP.NET Core & EF Core | ⏳ Upcoming | |
@@ -47,10 +47,11 @@ Notes are organized by phase, following a structured 9-phase learning plan order
 | 02 | [async-await-internals](Phase_2/02-async-await-internals.md) | async/await state machine | ✅ |
 | 03 | [cancellation-token](Phase_2/03-cancellation-token.md) | CancellationToken | ✅ |
 | 04 | [task-combinators](Phase_2/04-task-combinators.md) | WhenAll / WhenAny / WhenEach | ✅ |
-| 05 | — | Synchronization primitives | ⏳ |
-| 06 | — | Deadlocks & race conditions | ⏳ |
-| 07 | — | ValueTask | ⏳ |
-| 08 | — | Channels / Dataflow | ⏳ |
+| 05 | [synchronization-primitives](Phase_2/05-synchronization-primitives.md) | Synchronization primitives | ✅ |
+| 06 | [concurrent-collections](Phase_2/06-concurrent-collections.md) | Concurrent collections | ✅ |
+| 07 | [deadlocks-race-conditions](Phase_2/07-deadlocks-race-conditions.md) | Deadlocks & race conditions | ✅ |
+| 08 | [valuetask](Phase_2/08-valuetask.md) | ValueTask | ✅ |
+| 09 | — | Channels / Dataflow | ⏳ |
 
 ---
 
