@@ -8,7 +8,7 @@ Notes are organized by phase, following a structured 9-phase learning plan order
 
 | Phase | Topic | Status | Notes |
 |-------|-------|--------|-------|
-| Phase 2 | Threading & Async | 🔄 In progress | 7/9 topics |
+| Phase 2 | Threading & Async | ✅ Complete | 9/9 topics |
 | Phase 3 | C# Internals | ⏳ Upcoming | |
 | Phase 5 | Design Patterns | ⏳ Upcoming | |
 | Phase 4 | ASP.NET Core & EF Core | ⏳ Upcoming | |
@@ -39,7 +39,7 @@ Notes are organized by phase, following a structured 9-phase learning plan order
 
 ---
 
-## Phase 2 — Threading & Async 🔄
+## Phase 2 — Threading & Async ✅
 
 | # | Note | Topic | Status |
 |---|------|-------|--------|
@@ -51,7 +51,7 @@ Notes are organized by phase, following a structured 9-phase learning plan order
 | 06 | [concurrent-collections](Phase_2/06-concurrent-collections.md) | Concurrent collections | ✅ |
 | 07 | [deadlocks-race-conditions](Phase_2/07-deadlocks-race-conditions.md) | Deadlocks & race conditions | ✅ |
 | 08 | [valuetask](Phase_2/08-valuetask.md) | ValueTask | ✅ |
-| 09 | — | Channels / Dataflow | ⏳ |
+| 09 | [channels-and-dataflow](Phase_2/09-channels-and-dataflow.md) | Channels / Dataflow | ✅ |
 
 ---
 
