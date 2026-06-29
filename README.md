@@ -9,7 +9,7 @@ Notes are organized by phase, following a structured 9-phase learning plan order
 | Phase | Topic | Status | Notes |
 |-------|-------|--------|-------|
 | Phase 2 | Threading & Async | ✅ Complete | 9/9 topics |
-| Phase 3 | C# Internals | ⏳ Upcoming | |
+| Phase 3 | C# Internals | ⏳ In progress | 1/9 topics |
 | Phase 5 | Design Patterns | ⏳ Upcoming | |
 | Phase 4 | ASP.NET Core & EF Core | ⏳ Upcoming | |
 | Phase 1 | Memory & GC | ✅ Complete | 12 notes |
@@ -52,6 +52,22 @@ Notes are organized by phase, following a structured 9-phase learning plan order
 | 07 | [deadlocks-race-conditions](Phase_2/07-deadlocks-race-conditions.md) | Deadlocks & race conditions | ✅ |
 | 08 | [valuetask](Phase_2/08-valuetask.md) | ValueTask | ✅ |
 | 09 | [channels-and-dataflow](Phase_2/09-channels-and-dataflow.md) | Channels / Dataflow | ✅ |
+
+---
+
+## Phase 3 — C# Internals ⏳
+
+| # | Note | Topic | Status |
+|---|------|-------|--------|
+| 01 | [delegates-events](Phase_3/01-delegates-events.md) | Delegates & Events | ✅ |
+| 02 | expression-trees | Expression Trees | ⏳ |
+| 03 | nullable-types | Nullable Types | ⏳ |
+| 04 | pattern-matching | Pattern Matching | ⏳ |
+| 05 | ref-out-in | ref / out / in | ⏳ |
+| 06 | closures | Closures | ⏳ |
+| 07 | generics | Generics | ⏳ |
+| 08 | yield-linq | yield / LINQ deepening | ⏳ |
+| 09 | source-generators | Source Generators | ⏳ |
 
 ---
 
