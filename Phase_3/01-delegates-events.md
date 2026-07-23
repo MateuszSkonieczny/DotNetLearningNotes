@@ -137,6 +137,53 @@ public event EventHandler Clicked
 
 The simple `public event EventHandler Clicked;` syntax is sugar for exactly this — compiler-generated backing field plus add/remove accessors. Write the explicit version when you need custom logic (thread-safe add/remove via `Interlocked`, forwarding to another object's event, etc.).
 
+### `EventHandler<TEventArgs>` — The Idiomatic Pattern
+
+Plain `EventHandler` (no generic) only ever carries `(object? sender, EventArgs e)` — no payload beyond "it happened." The moment a handler needs actual data, the idiomatic .NET pattern is `EventHandler<TEventArgs>` with a dedicated args class, not `Action<T>` with a bare value.
+
+```csharp
+public class StringPulledEventArgs : EventArgs
+{
+    public int StringNumber { get; }
+    public StringPulledEventArgs(int stringNumber) => StringNumber = stringNumber;
+}
+
+public class MarionetteWarden
+{
+    public event EventHandler<StringPulledEventArgs>? OnStringPulled;
+
+    public void PullTheString(int stringNumber)
+    {
+        OnStringPulled?.Invoke(this, new StringPulledEventArgs(stringNumber));
+    }
+}
+
+public class StringPullingHandler
+{
+    public void HandleStringPulling(object? sender, StringPulledEventArgs e)
+        => Console.WriteLine($"String {e.StringNumber} is pulled");
+}
+```
+
+**Why not `Action<int>`:** the signature is baked into every subscriber. Add a second piece of data later (e.g. `PulledBy`) and `Action<int>` forces a breaking signature change — every existing handler stops compiling. With `EventArgs`, you add a property (optionally via a new constructor overload, keeping the old one for backward compatibility) and every existing handler still compiles untouched:
+
+```csharp
+public class StringPulledEventArgs : EventArgs
+{
+    public int StringNumber { get; }
+    public string? PulledBy { get; }
+
+    public StringPulledEventArgs(int stringNumber) : this(stringNumber, null) { }
+    public StringPulledEventArgs(int stringNumber, string? pulledBy)
+    {
+        StringNumber = stringNumber;
+        PulledBy = pulledBy;
+    }
+}
+```
+
+`sender` also earns its keep once one handler is wired to multiple publishers — it's the only way to tell which one fired without a separate closure per subscription.
+
 ## Subscribing — The Concept
 
 An event is a notification board: the publisher posts "something happened," subscribers hand over a method to run when it does. The publisher doesn't know or care what the subscriber does with the notification.
